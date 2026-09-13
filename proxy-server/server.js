@@ -35,9 +35,12 @@ async function fetchGoogleSheet() {
 
 // Parse API response to nested objects
 function parseSheetData(apiResponse) {
+  console.log("API Response:", JSON.stringify(apiResponse).substring(0, 500));
   const values = apiResponse.values;
   if (!values || values.length < 2) {
-    throw new Error("Sheet is empty or has no data rows");
+    throw new Error(
+      `Sheet is empty or has no data rows. Got: ${JSON.stringify(apiResponse).substring(0, 200)}`,
+    );
   }
 
   // Headers: code, en, vi
