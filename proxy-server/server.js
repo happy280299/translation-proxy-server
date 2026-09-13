@@ -8,73 +8,70 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Fetch Google Sheet using Sheets API
-async function fetchGoogleSheet() {
+// Fetch Google Sheet CSV using export URL
+async function fetchGoogleSheetCSV() {
   const spreadsheetId = "1UY7dYDSzMfonEbQsp6TXNn8_rEiKenQS_zdSTRmVGXY";
-  const range = "Sheet1!A:C";
-  const apiKey = "AIzaSyDyWJaIeS-isNc_-q7495tAoUtfxo0xO1w"; // Public API key
-
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?key=${apiKey}`;
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv`;
 
   return new Promise((resolve, reject) => {
     https
       .get(url, (res) => {
         let data = "";
         res.on("data", (chunk) => (data += chunk));
-        res.on("end", () => {
-          try {
-            resolve(JSON.parse(data));
-          } catch (e) {
-            reject(e);
-          }
-        });
+        res.on("end", () => resolve(data));
       })
       .on("error", reject);
   });
 }
 
-// Parse API response to nested objects
-function parseSheetData(apiResponse) {
-  console.log("API Response:", JSON.stringify(apiResponse).substring(0, 500));
-  const values = apiResponse.values;
-  if (!values || values.length < 2) {
-    throw new Error(
-      `Sheet is empty or has no data rows. Got: ${JSON.stringify(apiResponse).substring(0, 200)}`,
-    );
+// Parse CSV
+function parseCSVLine(line) {
+  const result = [];
+  let current = "";
+  let insideQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      insideQuotes = !insideQuotes;
+    } else if (char === "," && !insideQuotes) {
+      result.push(current.trim().replace(/^"|"$/g, ""));
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim().replace(/^"|"$/g, ""));
+  return result;
+}
+
+function parseSheetData(csv) {
+  const lines = csv.trim().split("\n");
+  if (lines.length < 2) {
+    throw new Error("Sheet is empty");
   }
 
-  // Headers: code, en, vi
-  const headers = values[0].map((h) => h.toLowerCase());
+  const headers = parseCSVLine(lines[0]);
   const codeIndex = headers.indexOf("code");
   const enIndex = headers.indexOf("en");
   const viIndex = headers.indexOf("vi");
 
-  if (codeIndex === -1 || enIndex === -1 || viIndex === -1) {
-    throw new Error(`Missing columns. Found: ${headers.join(", ")}`);
-  }
-
   const en = {};
   const vi = {};
 
-  // Parse data rows
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    const code = row[codeIndex];
-    const enValue = row[enIndex];
-    const viValue = row[viIndex];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = parseCSVLine(lines[i]);
+    if (!cells[codeIndex]) continue;
 
-    if (code && enValue) {
-      setNestedProperty(en, code, enValue);
-    }
-    if (code && viValue) {
-      setNestedProperty(vi, code, viValue);
-    }
+    const code = cells[codeIndex];
+    if (cells[enIndex]) setNested(en, code, cells[enIndex]);
+    if (cells[viIndex]) setNested(vi, code, cells[viIndex]);
   }
 
   return { en, vi };
 }
 
-function setNestedProperty(obj, path, value) {
+function setNested(obj, path, value) {
   const keys = path.split(".");
   let current = obj;
   for (let i = 0; i < keys.length - 1; i++) {
@@ -87,8 +84,8 @@ function setNestedProperty(obj, path, value) {
 // Endpoint: Sync translations
 app.post("/sync-translations", async (req, res) => {
   try {
-    const apiResponse = await fetchGoogleSheet();
-    const { en, vi } = parseSheetData(apiResponse);
+    const csv = await fetchGoogleSheetCSV();
+    const { en, vi } = parseSheetData(csv);
 
     res.json({
       success: true,
