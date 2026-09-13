@@ -8,57 +8,43 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Fetch Google Sheet data as CSV
+// Fetch Google Sheet using Sheets API
 async function fetchGoogleSheet() {
   const spreadsheetId = "1UY7dYDSzMfonEbQsp6TXNn8_rEiKenQS_zdSTRmVGXY";
-  const sheetId = "0";
-  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${sheetId}`;
+  const range = "Sheet1!A:C";
+  const apiKey = "AIzaSyDyWJaIeS-isNc_-q7495tAoUtfxo0xO1w"; // Public API key
+
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?key=${apiKey}`;
 
   return new Promise((resolve, reject) => {
     https
       .get(url, (res) => {
         let data = "";
         res.on("data", (chunk) => (data += chunk));
-        res.on("end", () => resolve(data));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(e);
+          }
+        });
       })
       .on("error", reject);
   });
 }
 
-// Parse CSV line handling quoted fields
-function parseCSVLine(line) {
-  const result = [];
-  let current = "";
-  let insideQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-
-    if (char === '"') {
-      insideQuotes = !insideQuotes;
-    } else if (char === "," && !insideQuotes) {
-      result.push(current.trim().replace(/^"|"$/g, ""));
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-  result.push(current.trim().replace(/^"|"$/g, ""));
-  return result;
-}
-
-// Parse CSV to nested objects
-function parseCSV(csv) {
-  const lines = csv.trim().split("\n");
-  if (lines.length < 2) {
-    throw new Error("CSV is empty or has no data rows");
+// Parse API response to nested objects
+function parseSheetData(apiResponse) {
+  const values = apiResponse.values;
+  if (!values || values.length < 2) {
+    throw new Error("Sheet is empty or has no data rows");
   }
 
-  // Parse header
-  const headers = parseCSVLine(lines[0]);
-  const codeIndex = headers.findIndex((h) => h.toLowerCase() === "code");
-  const enIndex = headers.findIndex((h) => h.toLowerCase() === "en");
-  const viIndex = headers.findIndex((h) => h.toLowerCase() === "vi");
+  // Headers: code, en, vi
+  const headers = values[0].map((h) => h.toLowerCase());
+  const codeIndex = headers.indexOf("code");
+  const enIndex = headers.indexOf("en");
+  const viIndex = headers.indexOf("vi");
 
   if (codeIndex === -1 || enIndex === -1 || viIndex === -1) {
     throw new Error(`Missing columns. Found: ${headers.join(", ")}`);
@@ -68,13 +54,11 @@ function parseCSV(csv) {
   const vi = {};
 
   // Parse data rows
-  for (let i = 1; i < lines.length; i++) {
-    const cells = parseCSVLine(lines[i]);
-    if (cells.length === 0 || !cells[codeIndex]) continue;
-
-    const code = cells[codeIndex];
-    const enValue = cells[enIndex];
-    const viValue = cells[viIndex];
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const code = row[codeIndex];
+    const enValue = row[enIndex];
+    const viValue = row[viIndex];
 
     if (code && enValue) {
       setNestedProperty(en, code, enValue);
@@ -100,8 +84,8 @@ function setNestedProperty(obj, path, value) {
 // Endpoint: Sync translations
 app.post("/sync-translations", async (req, res) => {
   try {
-    const csv = await fetchGoogleSheet();
-    const { en, vi } = parseCSV(csv);
+    const apiResponse = await fetchGoogleSheet();
+    const { en, vi } = parseSheetData(apiResponse);
 
     res.json({
       success: true,
